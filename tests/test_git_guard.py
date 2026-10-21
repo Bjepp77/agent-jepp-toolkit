@@ -40,9 +40,16 @@ BLOCK = [
     'sh -c "git push"', "bash -lc 'cd x && git push'", "eval git push", "cd x && git push",
     "git status; git push", "git status\ngit push", "git p", "git sp", 'git push "unterminated',
     "nohup git push origin main &", "git --no-pager push",
+    "cat <<'EOF'\nit's data\nEOF\ngit push",                          # push after a heredoc still blocks
+    "echo it's && git push",                                            # unparseable + real push
+
 ]
 ALLOW = [
-    "git status", 'git commit -m "push later"', "git push --dry-run", "git push -n origin main",
+    "git status", 'git commit -m "push later"',
+    "git commit -F - <<'EOF'\nowner's pending pushes\nEOF",          # live false positive 2026-10-21
+    "git commit -F - <<'EOF'\nnever git push from agents, it's blocked\nEOF",
+    "cat > notes.md <<EOF\ndon't git push yet\nEOF",
+    "git commit -m 'owner'\\''s pending pushes'", "git push --dry-run", "git push -n origin main",
     "echo push", "git log --grep push", 'grep -rn "git push" .', "ls -la", "git add README.md",
 ]
 AUTH = [  # (transcript, expected exit code for "git push")

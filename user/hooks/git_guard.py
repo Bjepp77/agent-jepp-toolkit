@@ -20,8 +20,9 @@ a script file that pushes (`./deploy.sh`), python/node subprocess calls, `gh`, `
 to the forge API, `$(...)` that builds the word "push" at run time. The real gates are a
 remote credential without push rights, branch protection, and CI.
 
-EXIT CODES. 0 allow; 2 block (reason on stderr goes back to Claude). If the command
-cannot be parsed and mentions "push", it blocks (fails closed). Any other internal error
+EXIT CODES. 0 allow; 2 block (reason on stderr goes back to Claude). Heredoc bodies are
+dropped first (they are data). If the rest cannot be parsed and still contains
+`git ... push`, it blocks (fails closed). Any other internal error
 allows (exit 0) so a bug cannot freeze every Bash call.
 """
 from __future__ import annotations
@@ -43,6 +44,25 @@ ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 class Unparseable(Exception):
     pass
+
+
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+GIT_PUSH_TEXT = re.compile(r"\bgit\s+(?:-\S+\s+(?:[^\s;&|]+\s+)?)*push\b")
+
+
+def strip_heredocs(cmd: str) -> str:
+    """Drop heredoc bodies (commit messages, file contents). They are data, not commands."""
+    out, lines, i = [], cmd.split("\n"), 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        delims = [m.group(2) for m in HEREDOC.finditer(line)]
+        i += 1
+        for d in delims:
+            while i < len(lines) and lines[i].strip() != d:
+                i += 1
+            i += 1  # skip the delimiter line
+    return "\n".join(out)
 
 
 def tokenize(cmd: str) -> list[str]:
@@ -209,11 +229,12 @@ def main() -> None:
     cmd = (data.get("tool_input") or {}).get("command") or ""
     if "push" not in cmd and "git" not in cmd:
         sys.exit(0)
+    cmd = strip_heredocs(cmd)
     try:
         found = push_in(cmd, data.get("cwd"))
     except Unparseable:
-        if "push" in cmd:
-            block("could not parse a command that mentions push, so it is blocked")
+        if GIT_PUSH_TEXT.search(cmd):
+            block("could not parse a command that contains `git ... push`, so it is blocked")
         sys.exit(0)
     except Exception:
         sys.exit(0)
