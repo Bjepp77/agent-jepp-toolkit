@@ -2,7 +2,9 @@
 
 Upstream: https://github.com/NaluKicks-808/agent-brain-harness
 Pinned commit: `f6c121a` (2026-10-21 16:35 -0600). Read-only clone: `~/Code/agent-brain-harness`.
-Plan: `docs/agent-brain-harness-plan.md`. On each upstream pull, diff every file below against the new commit.
+Plan: `docs/agent-brain-harness-plan.md`.
+Frozen (owner, 2026-10-22: no live links to Evan's work; keep copied pieces, credited). These copies are ours now:
+no upstream pulls, no pull requests to upstream. The license notice below stays.
 
 | Upstream file | Copied to | Commit | Local changes |
 |---|---|---|---|
