@@ -6,6 +6,14 @@ Plan: `docs/agent-brain-harness-plan.md`. On each upstream pull, diff every file
 
 | Upstream file | Copied to | Commit | Local changes |
 |---|---|---|---|
+| `core/roles/reviewer.md` | `~/.claude/harness/reviewer.md` | f6c121a | none |
+| `core/roles/lead.md` (verify section) | `~/.claude/harness/lead.md` "Verify before you report done" | f6c121a | rewritten for Agent subagents instead of `spawn`; `.harness` file bus dropped |
+| `adapters/claude-code/extras/hooks/reply_check.py` | `~/.claude/hooks/reply_check.py` | f6c121a | `VOICE_TIERS` cap 1300 -> 500 chars (~80 words, our caveman cap). Replaces our blocking 80-word lead/worker check with a next-prompt nudge |
+| `adapters/claude-code/extras/hooks/voice_nudge.py` | `~/.claude/hooks/voice_nudge.py`, wired on UserPromptSubmit | f6c121a | none |
+| `brain/template/tools/expire_rows.py`, `ledger_merge.py`, their tests | `~/Work/tools/`, `~/Work/tools/tests/` | f6c121a | none |
+| `brain/template/.gitattributes` (ledger-rows line) | `~/Work/.gitattributes` + clone git config driver | f6c121a | `wiki/log.md` union line left out (no log.md in ~/Work) |
+| `brain/template/tools/agenda.py` (`TAG`, `STRUCK_TITLE`, `is_closed`, `strike_title`) | `~/Work/tools/agenda.py` | f6c121a | only these four; rest of our trimmed agenda.py kept |
+| `skills/wtfhappened/SKILL.md` | `~/.claude/skills/wtfhappened/SKILL.md` | f6c121a | paths -> `~/Work`; `agent-brain-harness` CLI, `find.py`, `lint.py` steps removed |
 
 ## MIT notice (travels with every file above)
 
