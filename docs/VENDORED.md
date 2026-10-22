@@ -14,6 +14,7 @@ Plan: `docs/agent-brain-harness-plan.md`. On each upstream pull, diff every file
 | `brain/template/.gitattributes` (ledger-rows line) | `~/Work/.gitattributes` + clone git config driver | f6c121a | `wiki/log.md` union line left out (no log.md in ~/Work) |
 | `brain/template/tools/agenda.py` (`TAG`, `STRUCK_TITLE`, `is_closed`, `strike_title`) | `~/Work/tools/agenda.py` | f6c121a | only these four; rest of our trimmed agenda.py kept |
 | `skills/wtfhappened/SKILL.md` | `~/.claude/skills/wtfhappened/SKILL.md` | f6c121a | paths -> `~/Work`; `agent-brain-harness` CLI, `find.py`, `lint.py` steps removed |
+| `harness.py` `doctor_*` (lines 686-803; idea only) | `lib/doctor.py`, `tests/test_doctor.py` | f6c121a | rewritten from scratch for `~/.claude` + `~/Work` checks; read-only; stdlib only; `ok`/`warn`/`bad` lines with fixes |
 
 ## MIT notice (travels with every file above)
 

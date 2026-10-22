@@ -18,6 +18,9 @@ check "shell syntax" 'bash -n "$KIT/install.sh" && bash -n "$KIT/repo/secret-sca
 echo "== git_guard"
 check "git_guard command cases" 'python3 "$KIT/tests/test_git_guard.py"'
 
+echo "== doctor"
+check "doctor cases" 'python3 "$KIT/tests/test_doctor.py"'
+
 echo "== installer, throwaway CLAUDE_CONFIG_DIR"
 CFG="$T/cfg"; mkdir -p "$CFG/hooks"
 printf '# My own notes\nkeep this line\n' > "$CFG/CLAUDE.md"
