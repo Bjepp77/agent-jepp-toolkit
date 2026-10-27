@@ -45,7 +45,8 @@ PATTERNS=(
   '(SERVICE_ROLE|SECRET|PASSWORD|API_KEY|TOKEN)[A-Z_]*[[:space:]]*[=:][[:space:]]*["'\'']?[A-Za-z0-9/+_.-]{24,}'  # NAME=longvalue
 )
 
-ADDED=$(git diff --cached -U0 --no-color --diff-filter=ACMR -- . ':(exclude,glob)**/secret-scan.sh' | grep -E '^\+' | grep -vE '^\+\+\+ ')
+# No path is excluded: none of the PATTERNS matches its own text, so this file can be committed.
+ADDED=$(git diff --cached -U0 --no-color --diff-filter=ACMR | grep -E '^\+' | grep -vE '^\+\+\+ ')
 for p in "${PATTERNS[@]}"; do
   if hit=$(printf '%s\n' "$ADDED" | grep -E -m1 -- "$p"); then
     # Never echo the matched text. Say which rule fired.

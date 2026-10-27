@@ -73,6 +73,27 @@ check "commit staging .env is refused" '! git -C "$R" commit -qm env >/dev/null 
 git -C "$R" restore --staged .env
 check "repo re-run changes nothing" '"$KIT/install.sh" --repo "$R" | grep -q "Nothing to change" && [ $(grep -c "# agent-jepp-toolkit" "$R/.githooks/pre-commit") -eq 1 ]'
 
+mkdir -p "$R/sub"; echo "KEY=$FAKE" > "$R/sub/secret-scan.sh"; git -C "$R" add sub/secret-scan.sh
+check "key in a file named secret-scan.sh is refused" '! git -C "$R" commit -qm leak2 >/dev/null 2>&1'
+git -C "$R" restore --staged sub/secret-scan.sh; rm -r "$R/sub"
+git -C "$R" add .githooks
+check "the scanner itself commits cleanly" 'git -C "$R" commit -qm hooks >/dev/null 2>&1'
+
+echo "== installer safety (2026-10-27 fixes)"
+R2="$T/pyrepo"; git init -q -b main "$R2"
+printf '#!/usr/bin/env python3\nimport sys\nsys.exit(0)\n' > "$R2/.git/hooks/pre-commit"; cp "$R2/.git/hooks/pre-commit" "$T/py.orig"
+check "--repo refuses a Python pre-commit and leaves it unchanged" '! "$KIT/install.sh" --repo "$R2" >/dev/null 2>&1 && cmp -s "$R2/.git/hooks/pre-commit" "$T/py.orig"'
+CFG3="$T/cfg3"; mkdir -p "$CFG3/skills" "$T/src/roundtable"; echo '{}' > "$CFG3/settings.json"
+echo "SOURCE OF TRUTH" > "$T/src/roundtable/SKILL.md"; ln -s "$T/src/roundtable" "$CFG3/skills/roundtable"
+check "refuses to write through a symlinked skill dir" '! CLAUDE_CONFIG_DIR="$CFG3" "$KIT/install.sh" >/dev/null 2>&1 && grep -q "SOURCE OF TRUTH" "$T/src/roundtable/SKILL.md" && [ ! -e "$CFG3/CLAUDE.md" ]'
+rm "$CFG3/skills/roundtable"; echo "# mine" > "$T/src/CLAUDE.md"; ln -s "$T/src/CLAUDE.md" "$CFG3/CLAUDE.md"
+check "refuses to replace a symlinked CLAUDE.md" '! CLAUDE_CONFIG_DIR="$CFG3" "$KIT/install.sh" >/dev/null 2>&1 && [ -L "$CFG3/CLAUDE.md" ] && [ "$(cat "$T/src/CLAUDE.md")" = "# mine" ]'
+CFG4="$T/cfg4"; mkdir -p "$CFG4" "$T/fakebin"; echo ORIGINAL > "$CFG4/CLAUDE.md"; echo '{}' > "$CFG4/settings.json"
+printf '#!/bin/sh\nprintf 20261027-120000\n' > "$T/fakebin/date"; chmod +x "$T/fakebin/date"
+cp -R "$KIT" "$T/kit3"; PATH="$T/fakebin:$PATH" CLAUDE_CONFIG_DIR="$CFG4" "$T/kit3/install.sh" >/dev/null
+echo "- second" >> "$T/kit3/user/CLAUDE.md"; PATH="$T/fakebin:$PATH" CLAUDE_CONFIG_DIR="$CFG4" "$T/kit3/install.sh" >/dev/null
+check "two installs in the same second keep both backups" 'grep -qx ORIGINAL "$CFG4/backups/agent-jepp-toolkit-20261027-120000/files$CFG4/CLAUDE.md" && [ -d "$CFG4/backups/agent-jepp-toolkit-20261027-120000-2" ]'
+
 echo "== coexistence with the real ~/.claude/settings.json (read-only, merged into a temp file)"
 REAL="$HOME/.claude/settings.json"
 if [ -f "$REAL" ]; then

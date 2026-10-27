@@ -74,6 +74,10 @@ if [ -n "$REPO" ]; then
   elif grep -qF '# agent-jepp-toolkit' "$HD/pre-commit"; then
     cp "$HD/pre-commit" "$f"
   elif head -1 "$HD/pre-commit" | grep -q '^#!'; then
+    if ! head -1 "$HD/pre-commit" | grep -qE '^#!.*[/ ](ba|z|da|k)?sh([[:space:]]|$)'; then
+      echo "refusing: $HD/pre-commit is not a shell script ($(head -1 "$HD/pre-commit")). Chain $HD/secret-scan.sh from it by hand." >&2
+      exit 1
+    fi
     # insert right after the shebang so an "exit 0" at the end cannot skip it
     { head -1 "$HD/pre-commit"; echo "$LINE"; tail -n +2 "$HD/pre-commit"; } > "$f"
   else
@@ -84,10 +88,29 @@ fi
 
 # ---------- apply phase ----------
 if [ ${#PLAN[@]} -eq 0 ]; then echo "Nothing to change. Already installed."; exit 0; fi
+# never write through a symlink: it would overwrite the link's source or break the link
+for item in "${PLAN[@]}"; do
+  IFS='|' read -r src dest mode <<<"$item"
+  case "$dest" in "$CONFIG"/*) root="$CONFIG" ;; *) root="$HD" ;; esac
+  p="$dest"
+  while [ "$p" != "$root" ] && [ "$p" != "/" ] && [ "$p" != "." ]; do
+    if [ -L "$p" ]; then
+      echo "refusing: $p is a symlink, so installing would write through it. Update its source by hand, or replace the link, then re-run. Nothing was written." >&2
+      exit 1
+    fi
+    p="$(dirname "$p")"
+  done
+done
 if [ "$DRY" = 1 ]; then echo "Dry run: ${#PLAN[@]} file(s) would change. Nothing written."; exit 0; fi
 
 BK="$CONFIG/backups/agent-jepp-toolkit-$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$BK"
+# mkdir without -p fails if the dir exists, so a second install in the same second gets
+# its own dir instead of overwriting the first one's rollback copy
+mkdir -p "$CONFIG/backups"; base="$BK"; n=1
+until mkdir "$BK" 2>/dev/null; do
+  n=$((n+1)); BK="$base-$n"
+  [ "$n" -gt 99 ] && { echo "cannot create a backup dir under $CONFIG/backups" >&2; exit 1; }
+done
 : > "$BK/RESTORE.txt"
 for item in "${PLAN[@]}"; do
   IFS='|' read -r src dest mode <<<"$item"

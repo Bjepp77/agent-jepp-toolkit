@@ -11,9 +11,12 @@ ALLOWED.
   or /promote (Team Kit's one-run push authorization). Cross-session messages do not count.
 
 SEES THROUGH. `git -C dir push`, `git -c k=v push`, `--git-dir=`, env prefixes
-(`FOO=1 git push`, `env ... git push`), `command`/`exec`/`nohup`/`sudo`/`time`,
-absolute paths (`/usr/bin/git`), `sh -c` / `bash -c` / `zsh -c` / `eval` strings,
-and git aliases that expand to push.
+(`FOO=1 git push`, `env ... git push`), `command`/`exec`/`nohup`/`sudo`/`time`/`nice`,
+`timeout`/`caffeinate`/`stdbuf`/`xargs`, `find -exec`, absolute paths (`/usr/bin/git`),
+`sh -c` / `bash -c` / `zsh -c` / `eval` strings, heredocs fed to a shell
+(`bash <<EOF`, `sh -s <<EOF`, `cat <<EOF | bash`), `$(...)` and backticks (also inside
+unquoted heredoc bodies), and git aliases that expand to push, including
+`git -c alias.x=push x`.
 
 HOLES (this is a speed bump for an agent trying to comply, not a boundary):
 a script file that pushes (`./deploy.sh`), python/node subprocess calls, `gh`, `curl`
@@ -21,9 +24,10 @@ to the forge API, `$(...)` that builds the word "push" at run time. The real gat
 remote credential without push rights, branch protection, and CI.
 
 EXIT CODES. 0 allow; 2 block (reason on stderr goes back to Claude). Heredoc bodies are
-dropped first (they are data). If the rest cannot be parsed and still contains
-`git ... push`, it blocks (fails closed). Any other internal error
-allows (exit 0) so a bug cannot freeze every Bash call.
+dropped first (they are data) unless a shell reads them or they expand `$(...)`. If the rest cannot be parsed and still contains
+`git ... push`, it blocks (fails closed). Any other internal error also fails closed
+when the command contains the word "push"; otherwise it allows (exit 0) so a bug
+cannot freeze every Bash call.
 """
 from __future__ import annotations
 
@@ -35,7 +39,17 @@ import subprocess
 import sys
 
 AUTH_COMMANDS = ("/push", "/stage", "/promote")
-WRAPPERS = {"command", "exec", "nohup", "sudo", "time", "builtin", "nice"}
+WRAPPERS = {"command", "exec", "nohup", "sudo", "time", "builtin", "nice",
+            "timeout", "caffeinate", "stdbuf", "xargs"}
+# wrapper options that take a separate value (`nice -n 10`, `xargs -I {}`, `caffeinate -t 5`)
+WRAPPER_OPTS_WITH_ARG = {
+    "nice": {"-n"}, "timeout": {"-s", "-k", "--signal", "--kill-after"},
+    "caffeinate": {"-t", "-w"}, "stdbuf": {"-i", "-o", "-e"},
+    "xargs": {"-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a", "--delimiter", "--arg-file"},
+    "sudo": {"-u", "-g", "-C", "-D", "-h", "-p", "-U"},
+}
+FIND_EXEC = {"-exec", "-execdir", "-ok", "-okdir"}
+PUSH_OPTS_WITH_ARG = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 GIT_OPTS_WITH_ARG = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
 SEPARATORS = {";", "&&", "||", "|", "&", "\n", "(", ")", "|&"}
@@ -46,23 +60,67 @@ class Unparseable(Exception):
     pass
 
 
-HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+HEREDOC = re.compile(r"<<-?\s*(\\?)(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
 GIT_PUSH_TEXT = re.compile(r"\bgit\s+(?:-\S+\s+(?:[^\s;&|]+\s+)?)*push\b")
+# a shell (or eval/source/xargs) named on the heredoc line runs the body as commands
+SHELL_ON_LINE = re.compile(r"(?:^|[\s;&|(])(?:[^\s;&|()]*/)?(?:sh|bash|zsh|dash|ksh|eval|source|xargs)(?=$|[\s;&|)])")
 
 
-def strip_heredocs(cmd: str) -> str:
-    """Drop heredoc bodies (commit messages, file contents). They are data, not commands."""
-    out, lines, i = [], cmd.split("\n"), 0
+def substitutions(text: str, honor_single_quotes: bool = True) -> list[str]:
+    """Bodies of `$(...)` and backtick substitutions. Single quotes stop them in a command
+    line, but not in a heredoc body, so the caller says which applies."""
+    out, i, n, in_dq = [], 0, len(text), False
+    while i < n:
+        c = text[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "'" and honor_single_quotes and not in_dq:
+            j = text.find("'", i + 1)
+            i = n if j < 0 else j + 1
+            continue
+        if c == '"':
+            in_dq = not in_dq
+        elif c == "`":
+            j = text.find("`", i + 1)
+            out.append(text[i + 1:] if j < 0 else text[i + 1:j])
+            i = n if j < 0 else j + 1
+            continue
+        elif c == "$" and text[i + 1:i + 2] == "(":
+            depth, j = 1, i + 2
+            while j < n and depth:
+                depth += {"(": 1, ")": -1}.get(text[j], 0)
+                j += 1
+            out.append(text[i + 2:j - 1] if not depth else text[i + 2:])
+            i = j
+            continue
+        i += 1
+    return out
+
+
+def strip_heredocs(cmd: str) -> tuple[str, list[str]]:
+    """Drop heredoc bodies (commit messages, file contents): they are data. Return the
+    remaining text plus the code hidden in bodies: the whole body when a shell reads it,
+    and the `$(...)`/backtick parts of an unquoted body, which the shell expands."""
+    out, extra, lines, i = [], [], cmd.split("\n"), 0
     while i < len(lines):
         line = lines[i]
         out.append(line)
-        delims = [m.group(2) for m in HEREDOC.finditer(line)]
+        docs = [(m.group(3), bool(m.group(1) or m.group(2))) for m in HEREDOC.finditer(line)]
+        to_shell = bool(docs) and bool(SHELL_ON_LINE.search(HEREDOC.sub(" ", line)))
         i += 1
-        for d in delims:
+        for d, quoted in docs:
+            body = []
             while i < len(lines) and lines[i].strip() != d:
+                body.append(lines[i])
                 i += 1
             i += 1  # skip the delimiter line
-    return "\n".join(out)
+            text = "\n".join(body)
+            if to_shell:
+                extra.append(text)
+            if not quoted:
+                extra.extend(substitutions(text, honor_single_quotes=False))
+    return "\n".join(out), extra
 
 
 def tokenize(cmd: str) -> list[str]:
@@ -105,6 +163,10 @@ def push_in(cmd: str, cwd: str | None, depth: int = 0) -> str | None:
     """Return a description of the push found in cmd, or None."""
     if depth > 4:
         raise Unparseable("nesting too deep")
+    for sub_cmd in substitutions(cmd):
+        found = push_in(sub_cmd, cwd, depth + 1)
+        if found:
+            return found
     for seg in segments(tokenize(cmd)):
         i = 0
         # strip env assignments and wrappers
@@ -117,9 +179,12 @@ def push_in(cmd: str, cwd: str | None, depth: int = 0) -> str | None:
                 while i < len(seg) and (seg[i].startswith("-") or ASSIGN.match(seg[i])):
                     i += 1
             elif os.path.basename(t) in WRAPPERS:
+                w = os.path.basename(t)
                 i += 1
                 while i < len(seg) and seg[i].startswith("-"):
-                    i += 1
+                    i += 2 if seg[i] in WRAPPER_OPTS_WITH_ARG.get(w, ()) else 1
+                if w == "timeout" and i < len(seg):
+                    i += 1  # the duration
             else:
                 break
         if i >= len(seg):
@@ -135,6 +200,13 @@ def push_in(cmd: str, cwd: str | None, depth: int = 0) -> str | None:
                             return found
                     break
             continue
+        if prog == "find":
+            for j, a in enumerate(rest):
+                if a in FIND_EXEC:
+                    found = push_in(" ".join(shlex.quote(x) for x in rest[j + 1:]), cwd, depth + 1)
+                    if found:
+                        return found
+            continue
         if prog == "eval":
             found = push_in(" ".join(rest), cwd, depth + 1)
             if found:
@@ -143,10 +215,14 @@ def push_in(cmd: str, cwd: str | None, depth: int = 0) -> str | None:
         if prog != "git":
             continue
         # walk git global options to the subcommand
-        k = 0
+        k, inline_aliases = 0, {}
         while k < len(rest):
             a = rest[k]
             if a in GIT_OPTS_WITH_ARG:
+                if a == "-c" and k + 1 < len(rest):
+                    key, _, value = rest[k + 1].partition("=")
+                    if key.lower().startswith("alias."):
+                        inline_aliases[key[len("alias."):]] = value
                 k += 2
             elif a.startswith("-"):
                 k += 1
@@ -156,7 +232,7 @@ def push_in(cmd: str, cwd: str | None, depth: int = 0) -> str | None:
             continue
         sub, args = rest[k], rest[k + 1:]
         if sub not in ("push",):
-            alias = git_aliases(cwd).get(sub)
+            alias = inline_aliases.get(sub) or git_aliases(cwd).get(sub)
             if alias:
                 if alias.startswith("!"):
                     found = push_in(alias[1:], cwd, depth + 1)
@@ -165,10 +241,23 @@ def push_in(cmd: str, cwd: str | None, depth: int = 0) -> str | None:
                 if found:
                     return found
             continue
-        if "--dry-run" in args or "-n" in args:
+        if is_dry_run(args):
             continue
         return "git push"
     return None
+
+
+def is_dry_run(args: list[str]) -> bool:
+    """True for a standalone `--dry-run` or `-n` push flag, not the value of `-o -n`."""
+    k = 0
+    while k < len(args):
+        a = args[k]
+        if a == "--":
+            return False
+        if a in ("--dry-run", "-n"):
+            return True
+        k += 2 if a in PUSH_OPTS_WITH_ARG else 1
+    return False
 
 
 def latest_user_prompt(transcript_path: str | None) -> str:
@@ -229,14 +318,21 @@ def main() -> None:
     cmd = (data.get("tool_input") or {}).get("command") or ""
     if "push" not in cmd and "git" not in cmd:
         sys.exit(0)
-    cmd = strip_heredocs(cmd)
+    raw, hidden = cmd, []
     try:
-        found = push_in(cmd, data.get("cwd"))
+        cmd, hidden = strip_heredocs(cmd)
+        found = None
+        for part in [cmd] + hidden:
+            found = push_in(part, data.get("cwd"))
+            if found:
+                break
     except Unparseable:
-        if GIT_PUSH_TEXT.search(cmd):
+        if GIT_PUSH_TEXT.search("\n".join([cmd] + hidden)):
             block("could not parse a command that contains `git ... push`, so it is blocked")
         sys.exit(0)
     except Exception:
+        if re.search(r"\bpush\b", raw):
+            block("the guard hit an internal error on a command that mentions push, so it is blocked")
         sys.exit(0)
     if not found:
         sys.exit(0)

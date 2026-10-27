@@ -42,6 +42,14 @@ BLOCK = [
     "nohup git push origin main &", "git --no-pager push",
     "cat <<'EOF'\nit's data\nEOF\ngit push",                          # push after a heredoc still blocks
     "echo it's && git push",                                            # unparseable + real push
+    # bypass shapes closed 2026-10-27 (secure-review T1, codex F3)
+    "bash <<'EOF'\ngit push\nEOF", "sh -s <<EOF\ngit push origin main\nEOF",
+    "cat <<'EOF' | bash\ngit push\nEOF", "cat <<EOF\n$(git push)\nEOF",
+    "timeout 60 git push", "timeout -s KILL 60 git push", "echo origin | xargs git push",
+    "xargs -I {} git push {}", "find . -maxdepth 0 -exec git push \\;", "caffeinate -i git push",
+    "caffeinate -t 5 git push", "stdbuf -oL git push", "stdbuf -o L git push", "echo `git push`",
+    'echo "$(git push)"', "git -c alias.x=push x", "git -c alias.y='!git push' y",
+    "git push -o -n origin main", "git push --push-option -n origin main", "nice -n 10 git push",
 
 ]
 ALLOW = [
@@ -50,6 +58,10 @@ ALLOW = [
     "git commit -F - <<'EOF'\nnever git push from agents, it's blocked\nEOF",
     "cat > notes.md <<EOF\ndon't git push yet\nEOF",
     "git commit -m 'owner'\\''s pending pushes'", "git push --dry-run", "git push -n origin main",
+    "git push -o ci.skip -n origin main", "git push origin main --dry-run",
+    "echo 'not `git push`'", "cat <<'EOF'\n$(git push) stays text\nEOF",
+    "timeout 60 git fetch", "find . -name '*.py' -exec grep -l push {} +",
+    "git -c alias.st=status st", "caffeinate -i make test",
     "echo push", "git log --grep push", 'grep -rn "git push" .', "ls -la", "git add README.md",
 ]
 AUTH = [  # (transcript, expected exit code for "git push")
