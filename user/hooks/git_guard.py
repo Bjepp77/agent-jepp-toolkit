@@ -7,7 +7,7 @@ per-repo guard so the two never double-fire.
 
 ALLOWED.
 - `git push --dry-run` / `-n`.
-- Any push when the latest real user prompt in this session starts with /push, /stage
+- Any push when the owner's latest typed prompt in this session starts with /push, /stage
   or /promote (Team Kit's one-run push authorization). Cross-session messages do not count.
 
 SEES THROUGH. `git -C dir push`, `git -c k=v push`, `--git-dir=`, env prefixes
@@ -283,7 +283,9 @@ def latest_user_prompt(transcript_path: str | None) -> str:
                 else:
                     continue
                 if text.strip():
-                    last = text
+                    # Only the owner's own typing can authorize: a plugin, peer or tool row cannot
+                    human = (e.get("origin") or {}).get("kind") == "human"
+                    last = text if human else ""
     except OSError:
         return ""
     return last
@@ -293,8 +295,9 @@ def authorized(prompt: str) -> bool:
     p = prompt.lstrip()
     if p.startswith("<cross-session-message"):
         return False
-    # Claude Code records a slash command as <command-name>/push</command-name>
-    m = re.search(r"<command-name>\s*(/[\w:-]+)\s*</command-name>", p)
+    # Claude Code records a slash command as <command-name>/push</command-name> at the start of the
+    # prompt; the tag anywhere else is quoted text, not a command
+    m = re.match(r"<command-name>\s*(/[\w:-]+)\s*</command-name>", p)
     first = m.group(1) if m else (p.split() or [""])[0]
     if not first.startswith("/"):
         return False
