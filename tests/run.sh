@@ -45,6 +45,20 @@ assert set(cmds(a)) <= set(cmds(b)), "lost a hook"
 assert b["model"]=="opus"
 assert sum("git_guard.py" in c for c in cmds(b))==1
 PY'
+HOOK_CMD='python3 "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/git_guard.py"'
+python3 - "$T/wrong-matcher.json" "$HOOK_CMD" <<'PY'
+import json, sys
+with open(sys.argv[1], "w") as f:
+    json.dump({"hooks": {"PreToolUse": [{"matcher": "Read", "hooks": [
+        {"type": "command", "command": sys.argv[2]}]}]}}, f)
+PY
+check "guard under Read does not satisfy Bash install" 'python3 "$KIT/lib/merge.py" settings "$T/wrong-matcher.json" "$HOOK_CMD" "$T/wrong-matcher.out" && python3 - "$T/wrong-matcher.out" "$HOOK_CMD" <<PY
+import json, sys
+entries = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
+assert len(entries) == 2
+assert entries[1]["matcher"] == "Bash"
+assert entries[1]["hooks"][0]["command"] == sys.argv[2]
+PY'
 check "backup holds the pre-install files" 'BK=$(ls -d "$CFG"/backups/agent-jepp-toolkit-*) && cmp -s "$BK/files$CFG/settings.json" "$T/settings.orig" && grep -q "rm -f" "$BK/RESTORE.txt"'
 check "installed hook runs and blocks a push" 'echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git push\"}}" | python3 "$CFG/hooks/git_guard.py" 2>/dev/null; [ $? -eq 2 ]'
 check "re-run changes nothing" '"$KIT/install.sh" | grep -q "Nothing to change" && [ $(ls -d "$CFG"/backups/agent-jepp-toolkit-* | wc -l) -eq 1 ]'
@@ -68,6 +82,9 @@ FAKE="sk-ant-$(printf 'x%.0s' $(seq 1 30))"   # built at run time; not a real ke
 echo "KEY=$FAKE" > "$R/b.txt"; git -C "$R" add b.txt
 check "commit with a key-shaped string is refused" '! git -C "$R" commit -qm leak >/dev/null 2>&1'
 git -C "$R" restore --staged b.txt; rm "$R/b.txt"
+printf '\000KEY=%s\000' "$FAKE" > "$R/binary.dat"; git -C "$R" add binary.dat
+check "staged binary blob with a key-shaped string is refused" '! git -C "$R" commit -qm binary-leak >/dev/null 2>&1'
+git -C "$R" restore --staged binary.dat; rm "$R/binary.dat"
 echo "X=1" > "$R/.env"; git -C "$R" add -f .env
 check "commit staging .env is refused" '! git -C "$R" commit -qm env >/dev/null 2>&1'
 git -C "$R" restore --staged .env

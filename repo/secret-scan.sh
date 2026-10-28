@@ -5,7 +5,7 @@
 #
 # Called from pre-commit as: "$(dirname "$0")/secret-scan.sh" || exit 1
 # Blocks: .env files (but .env.example / .env.sample are fine), private keys,
-# and common API key shapes. Looks only at lines being ADDED by this commit.
+# and common API key shapes. Scans added text lines and staged binary blobs.
 #
 # Escape hatch: `git commit --no-verify` skips this. Use it only for a false
 # positive you have read, and say so in the commit message.
@@ -53,6 +53,17 @@ for p in "${PATTERNS[@]}"; do
     bad "a staged line matches secret pattern: $p"
   fi
 done
+
+# Git's text diff has no added lines for binary files. Check their staged blob bytes.
+while IFS= read -r -d '' f; do
+  if git diff --cached --numstat -- "$f" | grep -qE '^-[[:space:]]+-[[:space:]]+'; then
+    for p in "${PATTERNS[@]}"; do
+      if git cat-file blob ":$f" | LC_ALL=C grep -aEq -- "$p"; then
+        bad "a staged binary blob matches secret pattern: $p"
+      fi
+    done
+  fi
+done < <(git diff --cached --name-only -z --diff-filter=ACMR)
 
 if [ "$FAIL" -ne 0 ]; then
   echo ""

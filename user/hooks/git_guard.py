@@ -23,7 +23,8 @@ a script file that pushes (`./deploy.sh`), python/node subprocess calls, `gh`, `
 to the forge API, `$(...)` that builds the word "push" at run time. The real gates are a
 remote credential without push rights, branch protection, and CI.
 
-EXIT CODES. 0 allow; 2 block (reason on stderr goes back to Claude). Heredoc bodies are
+EXIT CODES. 0 allow; 2 block, including malformed hook JSON on stdin (reason on stderr
+goes back to Claude). Heredoc bodies are
 dropped first (they are data) unless a shell reads them or they expand `$(...)`. If the rest cannot be parsed and still contains
 `git ... push`, it blocks (fails closed). Any other internal error also fails closed
 when the command contains the word "push"; otherwise it allows (exit 0) so a bug
@@ -314,11 +315,18 @@ def block(reason: str) -> None:
 def main() -> None:
     try:
         data = json.load(sys.stdin)
-    except Exception:
-        sys.exit(0)
+    except (ValueError, UnicodeError):
+        block("malformed hook JSON on stdin")
+    if not isinstance(data, dict):
+        block("malformed hook JSON on stdin")
     if data.get("tool_name") != "Bash":
         sys.exit(0)
-    cmd = (data.get("tool_input") or {}).get("command") or ""
+    tool_input = data.get("tool_input")
+    if not isinstance(tool_input, dict):
+        block("malformed hook JSON on stdin")
+    cmd = tool_input.get("command") or ""
+    if not isinstance(cmd, str):
+        block("malformed hook JSON on stdin")
     if "push" not in cmd and "git" not in cmd:
         sys.exit(0)
     raw, hidden = cmd, []

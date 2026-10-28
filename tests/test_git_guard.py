@@ -88,5 +88,10 @@ for c in ALLOW:
 for t, want in AUTH:
     if run("git push origin main", t) != want:
         fails += 1; print("AUTH WRONG:", open(t).read()[-120:], "want", want)
+for payload in ('{"tool_name":', '[]', '{"tool_name":"Bash","tool_input":[]}'):
+    result = subprocess.run([sys.executable, HOOK], input=payload,
+                            capture_output=True, text=True)
+    if result.returncode != 2:
+        fails += 1; print("MALFORMED HOOK JSON ALLOWED:", repr(payload))
 print(f"git_guard: {len(BLOCK)} block, {len(ALLOW)} allow, {len(AUTH)} auth cases, {fails} failure(s)")
 sys.exit(1 if fails else 0)

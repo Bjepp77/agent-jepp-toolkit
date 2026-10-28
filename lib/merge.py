@@ -3,6 +3,7 @@
 result to OUT, and never touches the destination itself (install.sh backs up and moves).
 Exit 3 = destination is malformed; nothing should be written."""
 import json
+import re
 import sys
 
 START = "<!-- agent-jepp-toolkit:start (managed by install.sh; edit the kit, not this block) -->"
@@ -45,8 +46,15 @@ def settings(dest, command, out):
         sys.stderr.write(f"{dest}: top level is not an object; nothing written\n")
         sys.exit(3)
     pre = data.setdefault("hooks", {}).setdefault("PreToolUse", [])
-    present = any("hooks/git_guard.py" in (h.get("command") or "")
-                  for entry in pre for h in entry.get("hooks", []))
+    def matches_bash(matcher):
+        try:
+            return re.fullmatch(matcher, "Bash") is not None
+        except (TypeError, re.error):
+            return False
+
+    present = any(h.get("type") == "command" and h.get("command") == command
+                  for entry in pre if matches_bash(entry.get("matcher"))
+                  for h in entry.get("hooks", []))
     if not present:
         pre.append({"matcher": "Bash", "hooks": [{"type": "command", "command": command, "timeout": 5}]})
     text = json.dumps(data, indent=2) + "\n"
